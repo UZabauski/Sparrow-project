@@ -1,0 +1,15 @@
+name: jenkins-grype-syft
+services:
+  jenkins-master:
+    build: ./jenkins-master
+    container_name: jenkins-master
+    ports:
+      - "8080:8080"
+  jenkins-slave:
+    build: ./jenkins-slave
+    container_name: jenkins-slave
+    restart: always
+    user: root
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    - /var/jenkins_home:/var/jenkins_home

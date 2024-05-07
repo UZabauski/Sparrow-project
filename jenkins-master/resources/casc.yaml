@@ -1,0 +1,112 @@
+jenkins:
+  systemMessage: "Jenkins configured automatically by Jenkins Configuration as Code plugin\n\n"
+  numExecutors: 0
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+       - id: ${JENKINS_ADMIN_ID}
+         password: ${JENKINS_ADMIN_PASSWORD}
+       - id: ${JENKINS_SLAVE_ID}
+         password: ${JENKINS_SLAVE_PASSWORD}
+  authorizationStrategy:
+    projectMatrix:
+      entries:
+        - group:
+            name: authenticated
+            permissions:
+              - Overall/Administer
+        - user:
+            name: anonymous
+            permissions:
+              - Overall/Read
+        - user:
+            name: swarm
+            permissions:
+              - Agent/Create
+              - Agent/Connect
+              - Agent/Configure
+unclassified:
+  location:
+    url: http://127.0.0.1:8080/
+    adminAddress: uzabauski@gmail.com
+  locale:
+    systemLocale: en
+    ignoreAcceptLanguage: true
+jobs:
+  - script: >
+      ['grype': 'A vulnerability scanner for container images and filesystems.',
+       'syft': 'A CLI tool and Go library for generating a Software Bill of Materials (SBOM) from container images and filesystems.'].each { folderName, descript -> 
+        folder(folderName) {
+          description("$descript")
+        }
+      }
+
+  - script: >
+      ['grype', 'syft'].each { name -> 
+        pipelineJob("$name/$name-analyze") {
+          parameters {
+            choiceParam('DOCKER_IMAGE', ['flask', 'httpd', 'webgoat'], 'Choose which Docker image will be built and scanned.')
+          }
+          properties {
+            githubProjectUrl('https://github.com/UZabauski/Dockerfiles-templates.git')
+          }
+          definition {
+            cps {
+              script("""\
+                pipeline {
+                  agent any
+                  environment {
+                    dockerImage = ''
+                  }
+                  stages {
+                    stage('Cleaning Work Space') {
+                      steps {
+                        cleanWs()
+                        script {
+                          try {
+                            sh "docker rmi \^${params.DOCKER_IMAGE}:v\^${env.BUILD_ID} 2> /dev/null"
+                            echo "Docker image \^${params.DOCKER_IMAGE}:v\^${env.BUILD_ID} has been removed."
+                          } catch (e) {
+                            echo "Docker image \^${params.DOCKER_IMAGE}:v\^${env.BUILD_ID} doesn't exists"
+                          }
+                        }
+                      }
+                    }
+                    stage ('Downloading Docker images') {
+                      steps {
+                        git 'https://github.com/UZabauski/Dockerfiles-templates.git'
+                      }
+                    }
+                    stage ('Building the required Docker image') {
+                      steps {
+                        script {
+                          dir("IncorrectDockerfiles/\^${params.DOCKER_IMAGE}/") {
+                            dockerImage = docker.build("\^${params.DOCKER_IMAGE}:v\^${env.BUILD_ID}")
+                          }
+                        }
+                      }
+                    }
+                    stage ("Analyzing Docker image with $name") {
+                      steps {
+                        script {
+                          def currentDate = sh(script: "date +%d-%m-%Y", returnStdout: true).trim()
+                          sh '''#!/bin/bash
+                            set -o pipefail
+                            $name '''+dockerImage.id+''' --scope AllLayers | tee ^${name}_analyze_'''+dockerImage.id+'''_'''+currentDate+'''.txt
+                          '''
+                        }
+                      }
+                    }
+                  }
+                  post { 
+                    success { 
+                      archiveArtifacts artifacts: '*.txt', fingerprint: true
+                    }
+                  }
+                }""".stripIndent())
+              sandbox(true)
+            }
+          }
+        }
+      }
